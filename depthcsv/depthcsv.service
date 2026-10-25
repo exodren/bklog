@@ -1,0 +1,20 @@
+[Unit]
+Description=Binance Futures depth+aggTrade recorder (depthcsv)
+After=network-online.target time-sync.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=/etc/depthcsv.env
+ExecStart=/opt/depthcsv/depthcsv
+Restart=always
+RestartSec=5
+# SIGTERM -> GAP shutdown, файлы закрываются, создаются .done
+KillSignal=SIGTERM
+TimeoutStopSec=30
+User=depthcsv
+StateDirectory=depthcsv
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

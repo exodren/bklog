@@ -1,0 +1,12 @@
+[Unit]
+Description=depthcsv: выгрузка закрытых файлов в Google Drive (rclone move)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=depthcsv
+EnvironmentFile=/etc/depthcsv.env
+ExecStart=/opt/depthcsv/depthcsv-upload.sh
+Nice=10
+IOSchedulingClass=idle

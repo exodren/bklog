@@ -1,0 +1,10 @@
+[Unit]
+Description=depthcsv: выгрузка каждые 10 минут
+
+[Timer]
+# со сдвигом 2 мин: часовые файлы закрываются в :00 + ~10 с
+OnCalendar=*:02/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

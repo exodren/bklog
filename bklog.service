@@ -1,0 +1,17 @@
+[Unit]
+Description=Binance order book logger
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/bklog/bklog --symbols btcusdt,ethusdt --out /data/bklog --min-free-gb 5
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+User=bklog
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
