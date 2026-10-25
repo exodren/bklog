@@ -162,6 +162,7 @@ struct Cfg {
     snap_every: Duration,
     watchdog: usize,
     watchdog_secs: u64,
+    min_free_gb: f64,
 }
 
 fn cfg() -> Cfg {
@@ -184,6 +185,7 @@ fn cfg() -> Cfg {
         snap_every: Duration::from_secs(num("SNAPSHOT_SEC", "600").max(10)),
         watchdog: syms.iter().position(|s| *s == wd).unwrap_or(0),
         watchdog_secs: num("TRADE_WATCHDOG_SEC", "30"),
+        min_free_gb: num("MIN_FREE_GB", "5") as f64,
         syms,
     }
 }
@@ -213,12 +215,13 @@ async fn main() {
     let work = {
         let (o, fp) = (out.clone(), first_pu.clone());
         let (du, tu, rest, every) = (c.depth_url, c.trade_url, c.rest, c.snap_every);
+        let (dir, min_free) = (c.out.clone(), c.min_free_gb);
         async move {
             tokio::join!(
                 ws_loop(DEPTH, du, o.clone(), fp.clone(), None),
                 ws_loop(TRADE, tu, o.clone(), fp.clone(), wd),
                 snapshots(rest, every, o, snap_rx, fp),
-                stats(),
+                stats(dir, min_free),
             )
         }
     };
@@ -457,22 +460,34 @@ async fn fetch(c: &reqwest::Client, url: &str) -> Result<(u64, String, u64), (St
     Ok((ns, body, hdr("x-mbx-used-weight-1m").unwrap_or(0)))
 }
 
-async fn stats() {
+async fn stats(dir: PathBuf, min_free: f64) {
     let mut t = tokio::time::interval(Duration::from_secs(60));
     t.tick().await;
     loop {
         t.tick().await;
+        let free = free_gb(&dir);
+        if free.is_some_and(|f| f < min_free) {
+            log!("WARN свободно {:.1} ГБ < {min_free} ГБ в {}", free.unwrap(), dir.display());
+        }
         log!(
-            "stats/мин: rows={} gaps={} reconnects={} parse_err={} dropped={} write_err={} queue_len={}",
+            "stats/мин: rows={} gaps={} reconnects={} parse_err={} dropped={} write_err={} queue_len={} free_gb={}",
             ROWS.swap(0, Relaxed),
             GAPS.swap(0, Relaxed),
             RECONNECTS.swap(0, Relaxed),
             PARSE_ERR.swap(0, Relaxed),
             DROPPED.swap(0, Relaxed),
             WRITE_ERR.swap(0, Relaxed),
-            QUEUED.load(Relaxed)
+            QUEUED.load(Relaxed),
+            free.map_or("?".into(), |f| format!("{f:.1}"))
         );
     }
+}
+
+/// Свободно на диске с `dir`, ГБ (через `df -Pk`; None, если df недоступен).
+fn free_gb(dir: &Path) -> Option<f64> {
+    let o = std::process::Command::new("df").arg("-Pk").arg(dir).output().ok()?;
+    let kb: f64 = String::from_utf8_lossy(&o.stdout).lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;
+    Some(kb / 1048576.0)
 }
 
 struct Open {

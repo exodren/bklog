@@ -15,7 +15,8 @@ WebSocket целиком, как пришло (`{"stream":..,"data":{E,T,s,U,u,p
 <OUT_DIR>/<SYM>/<SYM>_snap_YYYYMMDD_HHMMSS.jsonl.gz    REST-снимки
 ```
 Время в имени — время первой строки (UTC). Файлы режутся по часу (`ROTATE_MIN`). Пока файл пишется, он называется
-`*.part` и сбрасывается на диск раз в 5 с. После закрытия появляется пустой `<file>.done`, это сигнал для выгрузки.
+`*.part` и сбрасывается на диск раз в 5 с. После закрытия появляется пустой `<file>.done`: файл готов, его можно забирать.
+Автоматически рекордер ничего не удаляет, чистить диск нужно вручную (см. «Забор данных»).
 Если после падения остались `.part`, при старте они закрываются: читаются до последнего сброса, `verify` пометит их как оборванные.
 Чтение: `zcat file.jsonl.gz | head` или `gzip.open(...)` в Python.
 
@@ -48,7 +49,7 @@ WebSocket целиком, как пришло (`{"stream":..,"data":{E,T,s,U,u,p
 ## Проверка
 ```bash
 depthcsv verify /var/lib/depthcsv                 # все символы в каталоге
-depthcsv verify ~/gdrive-copy BTCUSDT ETHUSDT
+depthcsv verify /mnt/copy BTCUSDT ETHUSDT          # любая копия каталога
 ```
 Как собирается стакан: события с `u < L` отбрасываются; первым применяется событие с `pu ≤ L ≤ u`, это условие
 `U ≤ L ≤ u` из документации плюс случай, когда L попадает между событиями; дальше проверяется `pu == u` предыдущего.
@@ -63,38 +64,49 @@ depthcsv verify ~/gdrive-copy BTCUSDT ETHUSDT
 ## Установка (Ubuntu)
 ```bash
 curl https://sh.rustup.rs -sSf | sh && . ~/.cargo/env
-sudo apt install -y build-essential rclone
+sudo apt install -y build-essential
 cargo build --release && cargo test
 sudo useradd -r -s /usr/sbin/nologin depthcsv
 sudo install -D target/release/depthcsv /opt/depthcsv/depthcsv
-sudo install -m 755 depthcsv-upload.sh /opt/depthcsv/
 sudo install -m 644 depthcsv.env.example /etc/depthcsv.env      # поправить SYMBOLS при необходимости
-sudo cp depthcsv.service depthcsv-upload.service depthcsv-upload.timer /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now depthcsv depthcsv-upload.timer
+sudo cp depthcsv.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now depthcsv     # таймер выгрузки НЕ включаем
 journalctl -u depthcsv -f
 ```
-Раз в минуту в журнал пишется строка `stats/мин: rows gaps reconnects parse_err dropped write_err queue_len`. Предупреждения
+Раз в минуту в журнал пишется строка `stats/мин: rows gaps reconnects parse_err dropped write_err queue_len free_gb`
+(`free_gb` — свободное место на диске `OUT_DIR`; если меньше `MIN_FREE_GB`, по умолчанию 5, пишется WARN). Предупреждения
 начинаются с `WARN`. При старте проверяется синхронизация часов: `timedatectl` и расхождение с `/fapi/v1/time`
 больше 500 мс дают WARN. Нужен `chrony` или `systemd-timesyncd`.
 
-### Выгрузка в Google Drive
-Конфиг rclone в репозиторий не кладётся. Создайте его сами от имени пользователя сервиса:
-```bash
-sudo install -d -o depthcsv -m 700 /etc/depthcsv
-sudo -u depthcsv rclone config --config /etc/depthcsv/rclone.conf   # remote "gdrive" (на сервере без браузера: rclone authorize)
-sudo systemctl start depthcsv-upload && journalctl -u depthcsv-upload -n 50
+### Забор данных на Windows (rclone sftp)
+Данные забираются с ПК по SSH, на сервере ничего настраивать не нужно. Команда `copy` ничего не удаляет на сервере.
+Фильтр `*.jsonl.gz` берёт только закрытые файлы: у открытых суффикс `.part`.
+```powershell
+winget install Rclone.Rclone
+# один раз: remote "srv" по SSH-ключу (или pass=... через `rclone obscure`)
+rclone config create srv sftp host=СЕРВЕР user=root key_file=$env:USERPROFILE\.ssh\id_ed25519
+
+# забрать новые файлы (повторный запуск докачивает только новое; хэши сверяются через md5sum на сервере)
+rclone copy srv:/var/lib/depthcsv D:\depthcsv --include "*.jsonl.gz" --checksum --transfers 4 -P
+# убедиться, что всё на ПК совпадает с сервером
+rclone check srv:/var/lib/depthcsv D:\depthcsv --include "*.jsonl.gz" --one-way
 ```
-`depthcsv-upload.sh` запускается таймером раз в 10 минут (`:02, :12, …`) под `flock`. Скрипт берёт только файлы, рядом с
-которыми есть `.done`, и выполняет `rclone move --checksum` в `RCLONE_REMOTE` (по умолчанию `gdrive:depthcsv/`, структура
-`<SYM>/…` сохраняется). Локальный файл rclone удаляет только после того, как загрузка прошла и размер и хэш (MD5)
-совпали. После этого скрипт удаляет `.done`. Если свободно меньше `MIN_FREE_GB` (5 ГБ), в журнал пишется WARN.
+Диск на сервере чистить вручную и только после успешного `rclone check`, например файлы старше 7 дней:
+`find /var/lib/depthcsv -name '*.jsonl.gz*' -mtime +7 -delete`. При 2 символах ожидается около 1 ГБ в сутки,
+так что 60 ГБ хватит примерно на 4–6 недель.
+
+### Выгрузка на сервере (по умолчанию выключена)
+`depthcsv-upload.sh`, `.service` и `.timer` оставлены на случай, если понадобится выгрузка с сервера. Скрипт под `flock`
+копирует (`rclone copy --checksum`, без удаления) файлы, у которых есть `.done`, в `RCLONE_REMOTE` из `/etc/depthcsv.env`.
+Пока `RCLONE_REMOTE` не задан, скрипт только проверяет свободное место. Чтобы включить: задать `RCLONE_REMOTE`, настроить
+`rclone config --config /etc/depthcsv/rclone.conf`, установить `/opt/depthcsv/depthcsv-upload.sh` и юниты, затем
+`systemctl enable --now depthcsv-upload.timer`.
 
 ## Проверка готовности (2 часа, BTCUSDT + ETHUSDT)
 ```bash
-sudo systemctl stop depthcsv-upload.timer            # чтобы файлы остались локально
 sudo systemctl start depthcsv; sleep 2h; sudo systemctl stop depthcsv
 /opt/depthcsv/depthcsv verify /var/lib/depthcsv      # ждём: несовпадений 0, необъяснённых 0, ИТОГ: OK
-sudo systemctl start depthcsv depthcsv-upload.timer
+sudo systemctl start depthcsv
 ```
 Без биржи можно проверить на mock-сервере: `python3 ../tests/mock_binance.py` (нужен `pip install websockets`), затем
 `WS_DEPTH_BASE=ws://127.0.0.1:18081/public/stream WS_TRADE_BASE=ws://127.0.0.1:18081/market/stream REST_BASE=http://127.0.0.1:18080 OUT_DIR=./data SNAPSHOT_SEC=10 TRADE_WATCHDOG_SEC=0 ./target/release/depthcsv`.

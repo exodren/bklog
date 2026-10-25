@@ -1,5 +1,5 @@
 [Unit]
-Description=depthcsv: выгрузка закрытых файлов в Google Drive (rclone move)
+Description=depthcsv: копирование закрытых файлов в rclone-remote (rclone copy, по умолчанию выключена)
 After=network-online.target
 Wants=network-online.target
 
