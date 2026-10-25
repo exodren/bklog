@@ -32,8 +32,9 @@ static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERR: AtomicU64 = AtomicU64::new(0);
 static QUEUED: AtomicU64 = AtomicU64::new(0);
 
+// не println!: при закрытом stdout (EPIPE) он паникует и срывает закрытие файлов при остановке
 macro_rules! log {
-    ($($a:tt)*) => { println!("{} {}", fmt_ts(now_ns() / 1_000_000), format_args!($($a)*)) };
+    ($($a:tt)*) => {{ let _ = writeln!(std::io::stdout().lock(), "{} {}", fmt_ts(now_ns() / 1_000_000), format_args!($($a)*)); }};
 }
 
 /// Строка для потока записи; `file` = символ * 3 + вид (DEPTH/TRADE/SNAP).
